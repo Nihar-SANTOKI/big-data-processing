@@ -13,7 +13,6 @@ class SparkProcessor:
         self.spark = self._create_spark_session()
         
     def _create_spark_session(self) -> SparkSession:
-        """Create and configure Spark session"""
         spark = SparkSession.builder \
             .appName(settings.spark.app_name) \
             .master(settings.spark.master_url) \
@@ -22,7 +21,8 @@ class SparkProcessor:
             .config("spark.driver.maxResultSize", settings.spark.max_result_size) \
             .config("spark.driver.memory", settings.spark.driver_memory) \
             .config("spark.executor.memory", settings.spark.executor_memory) \
-            .config("spark.jars.packages", "org.postgresql:postgresql:42.6.0") \
+            .config("spark.jars.packages", "org.postgresql:postgresql:42.7.0,org.apache.hadoop:hadoop-aws:3.3.0") \
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
             .getOrCreate()
         
         spark.sparkContext.setLogLevel("WARN")
@@ -57,10 +57,10 @@ class SparkProcessor:
         """Clean and validate taxi trip data"""
         logger.info("Starting data cleaning process...")
         
-        # Original count
-        original_count = df.count()
+        # Check actual column names first
+        logger.info(f"Available columns: {df.columns}")
         
-        # Basic cleaning
+        # Use correct column names for 2023 data
         cleaned_df = df \
             .filter(col("fare_amount") > 0) \
             .filter(col("fare_amount") < 500) \
@@ -70,28 +70,11 @@ class SparkProcessor:
             .filter(col("passenger_count") <= 6) \
             .filter(col("tpep_pickup_datetime").isNotNull()) \
             .filter(col("tpep_dropoff_datetime").isNotNull()) \
-            .filter(col("tpep_pickup_datetime") < col("tpep_dropoff_datetime"))
-        
-        # Remove outliers using IQR for fare_amount
-        quantiles = cleaned_df.select(
-            expr("percentile_approx(fare_amount, 0.25)").alias("q1"),
-            expr("percentile_approx(fare_amount, 0.75)").alias("q3")
-        ).collect()[0]
-        
-        iqr = quantiles["q3"] - quantiles["q1"]
-        lower_bound = quantiles["q1"] - 1.5 * iqr
-        upper_bound = quantiles["q3"] + 1.5 * iqr
-        
-        cleaned_df = cleaned_df.filter(
-            (col("fare_amount") >= lower_bound) & 
-            (col("fare_amount") <= upper_bound)
-        )
-        
-        final_count = cleaned_df.count()
-        logger.info(f"Data cleaning completed. Rows: {original_count} -> {final_count}")
+            .filter(col("tpep_pickup_datetime") < col("tpep_dropoff_datetime")) \
+            .filter(col("total_amount") > 0)  # Add this validation
         
         return cleaned_df
-    
+
     def add_derived_features(self, df: DataFrame) -> DataFrame:
         """Add derived features for analysis"""
         logger.info("Adding derived features...")
@@ -101,20 +84,23 @@ class SparkProcessor:
             .withColumn("hour_of_day", hour(col("tpep_pickup_datetime"))) \
             .withColumn("day_of_week", dayofweek(col("tpep_pickup_datetime"))) \
             .withColumn("trip_duration_minutes", 
-                       (unix_timestamp(col("tpep_dropoff_datetime")) - 
+                    (unix_timestamp(col("tpep_dropoff_datetime")) - 
                         unix_timestamp(col("tpep_pickup_datetime"))) / 60) \
             .withColumn("is_weekend", 
-                       when(col("day_of_week").isin([1, 7]), True).otherwise(False)) \
+                    when(col("day_of_week").isin([1, 7]), True).otherwise(False)) \
             .withColumn("distance_category",
-                       when(col("trip_distance") < 1, "short")
-                       .when(col("trip_distance") < 5, "medium")
-                       .when(col("trip_distance") < 10, "long")
-                       .otherwise("very_long")) \
+                    when(col("trip_distance") < 1, "short")
+                    .when(col("trip_distance") < 5, "medium")
+                    .when(col("trip_distance") < 10, "long")
+                    .otherwise("very_long")) \
             .withColumn("fare_per_mile",
-                       when(col("trip_distance") > 0, col("fare_amount") / col("trip_distance"))
-                       .otherwise(0))
+                    when(col("trip_distance") > 0, col("fare_amount") / col("trip_distance"))
+                    .otherwise(0)) \
+            .withColumn("speed_mph", 
+                    when(col("trip_duration_minutes") > 0, 
+                            col("trip_distance") / (col("trip_duration_minutes") / 60))
+                    .otherwise(0))
         
-        logger.info("Derived features added successfully")
         return enhanced_df
     
     def calculate_daily_aggregations(self, df: DataFrame) -> DataFrame:

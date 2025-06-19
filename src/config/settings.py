@@ -28,9 +28,11 @@ class PostgreSQLConfig:
 class SparkConfig:
     master_url: str = os.getenv('SPARK_MASTER_URL', 'local[*]')
     app_name: str = os.getenv('SPARK_APP_NAME', 'NYCTaxiProcessor')
-    max_result_size: str = '2g'
-    driver_memory: str = '2g'
-    executor_memory: str = '2g'
+    max_result_size: str = '4g'  # Increased
+    driver_memory: str = '4g'    # Increased
+    executor_memory: str = '4g'  # Increased
+    executor_cores: str = '2'    # Added
+    sql_shuffle_partitions: str = '200'  # Added
 
 @dataclass
 class DataConfig:
