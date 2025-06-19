@@ -7,18 +7,23 @@ RUN apt-get update && apt-get install -y \
     curl \
     wget \
     vim \
+    openjdk-8-jdk \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Hadoop client
-RUN wget https://archive.apache.org/dist/hadoop/common/hadoop-3.2.1/hadoop-3.2.1.tar.gz \
-    && tar -xzf hadoop-3.2.1.tar.gz \
-    && mv hadoop-3.2.1 /opt/hadoop \
-    && rm hadoop-3.2.1.tar.gz
+# Set JAVA_HOME
+ENV JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+
+# Install compatible Hadoop version (3.3.0 to match Spark 3.3.0)
+RUN wget https://archive.apache.org/dist/hadoop/common/hadoop-3.3.0/hadoop-3.3.0.tar.gz \
+    && tar -xzf hadoop-3.3.0.tar.gz \
+    && mv hadoop-3.3.0 /opt/hadoop \
+    && rm hadoop-3.3.0.tar.gz
 
 ENV HADOOP_HOME=/opt/hadoop
 ENV PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
 ENV HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+ENV PYSPARK_PYTHON=python3
 
 USER $NB_UID
 
@@ -33,6 +38,6 @@ WORKDIR /app
 COPY . /app/
 
 # Expose ports
-EXPOSE 8888 4040
+EXPOSE 8888 4040 8080
 
 CMD ["start-notebook.sh", "--NotebookApp.token=''", "--NotebookApp.password=''"]
