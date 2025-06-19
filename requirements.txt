@@ -9,4 +9,4 @@ pytest==7.4.2
 jupyter==1.0.0
 matplotlib==3.8.2
 seaborn==0.13.0
-great-expectations==0.18.15
+great-expectations==1.0.0
