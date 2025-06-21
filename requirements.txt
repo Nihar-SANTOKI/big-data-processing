@@ -9,7 +9,7 @@ pytest==7.4.0
 jupyter==1.0.0
 matplotlib==3.7.1
 seaborn==0.12.2
-great-expectations==0.17.23
+great-expectations==0.18.19
 psutil==5.9.5
 pyarrow==12.0.1
 py4j==0.10.9.5  # Must match PySpark version

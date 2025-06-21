@@ -12,8 +12,19 @@ logger = setup_logger(__name__)
 class DataValidator:
     def __init__(self):
         # Use new GX API
-        self.context = gx.get_context()
+        self.context = get_context()
+    
+    def create_expectation_suite(self, df, suite_name="taxi_data_suite"):
+        """Create expectations for taxi data"""
+        suite = self.context.add_expectation_suite(expectation_suite_name=suite_name)
         
+        # Add specific expectations
+        suite.expect_column_values_to_not_be_null("fare_amount")
+        suite.expect_column_values_to_be_between("fare_amount", min_value=0, max_value=500)
+        suite.expect_column_values_to_be_between("trip_distance", min_value=0, max_value=100)
+        
+        return suite
+    
     def validate_data_quality(self, df: DataFrame) -> Dict[str, Any]:
         """Enhanced data quality checks"""
         logger.info("Running comprehensive data quality checks...")
