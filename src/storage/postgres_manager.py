@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any, List
 from contextlib import contextmanager
 from src.config.settings import settings
 from src.utils.logger import setup_logger
+import psycopg2.pool
 
 logger = setup_logger(__name__)
 
@@ -16,6 +17,8 @@ class PostgreSQLManager:
             'user': settings.postgres.username,
             'password': settings.postgres.password
         }
+        # Add connection pooling
+        self.pool = psycopg2.pool.SimpleConnectionPool(1, 10, **self.connection_params)
     
     @contextmanager
     def get_connection(self):

@@ -40,6 +40,7 @@ class DataConfig:
     hdfs_base_path: str = os.getenv('HDFS_BASE_PATH', '/user/data/taxi')
     batch_size: int = int(os.getenv('BATCH_SIZE', 100000))
 
+@dataclass
 class Settings:
     def __init__(self):
         self.aws = AWSConfig()
@@ -48,5 +49,15 @@ class Settings:
         self.data = DataConfig()
         self.log_level = os.getenv('LOG_LEVEL', 'INFO')
         self.log_file = os.getenv('LOG_FILE', 'logs/app.log')
+        
+        # Add validation
+        self._validate_config()
+    
+    def _validate_config(self):
+        """Validate critical configuration"""
+        if not self.postgres.host:
+            raise ValueError("POSTGRES_HOST must be set")
+        if not self.aws.access_key_id and self.aws.s3_bucket:
+            raise ValueError("AWS credentials required when S3 bucket is specified")
 
 settings = Settings()

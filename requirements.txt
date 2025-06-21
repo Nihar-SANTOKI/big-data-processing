@@ -1,6 +1,6 @@
 pyspark==3.3.0
-boto3==1.26.137
-psycopg2-binary==2.9.6
+boto3==1.28.57
+psycopg2-binary==2.9.7
 pandas==1.5.3
 numpy==1.24.3
 python-dotenv==1.0.0
@@ -14,4 +14,3 @@ psutil==5.9.5
 pyarrow==12.0.1
 py4j==0.10.9.5  # Must match PySpark version
 findspark==2.0.1
-hdfs3==0.3.1

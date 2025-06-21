@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any
 from botocore.exceptions import ClientError
 from src.config.settings import settings
 from src.utils.logger import setup_logger
-import BytesIO
+from io import BytesIO
 
 logger = setup_logger(__name__)
 

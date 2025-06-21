@@ -31,8 +31,9 @@ class SparkProcessor:
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
             .config("spark.hadoop.fs.s3a.aws.credentials.provider", 
                     "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider") \
+            .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com") \
+            .config("spark.hadoop.fs.s3a.path.style.access", "false") \
             .getOrCreate()
-        
         spark.sparkContext.setLogLevel("WARN")
         logger.info("Spark session created successfully")
         return spark
