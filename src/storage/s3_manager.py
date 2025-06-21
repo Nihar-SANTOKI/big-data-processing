@@ -16,7 +16,7 @@ class S3Manager:
             aws_secret_access_key=settings.aws.secret_access_key,
             region_name=settings.aws.region
         )
-        self.bucket_name = settings.aws.
+        self.bucket_name = settings.aws.s3_bucket
         
         if not settings.aws.access_key_id or not settings.aws.s3_bucket:
             logger.warning("AWS credentials not configured - S3 operations disabled")

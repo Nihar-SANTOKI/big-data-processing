@@ -1,5 +1,5 @@
 import great_expectations as gx
-from great_expectations.data_context import FileDataContext
+from great_expectations.data_context import get_context, FileDataContext
 from great_expectations.core import ExpectationSuite
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, count, when, isnan, isnull
@@ -12,7 +12,7 @@ logger = setup_logger(__name__)
 class DataValidator:
     def __init__(self):
         # Use new GX API
-        self.context = get_context()
+        self.context = gx.get_context()
     
     def create_expectation_suite(self, df, suite_name="taxi_data_suite"):
         """Create expectations for taxi data"""
