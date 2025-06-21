@@ -94,4 +94,4 @@ export SPARK_EXECUTOR_MEMORY=${SPARK_EXECUTOR_MEMORY:-2g}\n\
 exec "$@"' > /home/$NB_USER/start-spark-notebook.sh \
     && chmod +x /home/$NB_USER/start-spark-notebook.sh
 
-CMD ["/home/jovyan/start-spark-notebook.sh", "start-notebook.sh", "--NotebookApp.token=", "--NotebookApp.password=", "--NotebookApp.allow_root=True"]
+CMD ["start-notebook.sh", "--NotebookApp.token=''", "--NotebookApp.password=''", "--NotebookApp.allow_root=True"]

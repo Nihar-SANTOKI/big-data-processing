@@ -2,7 +2,6 @@ import great_expectations as gx
 from great_expectations.data_context import get_context, FileDataContext
 from great_expectations.core import ExpectationSuite
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, count, when, isnan, isnull
 from typing import Dict, Any, List
 import pandas as pd
 from src.utils.logger import setup_logger
@@ -27,6 +26,9 @@ class DataValidator:
     
     def validate_data_quality(self, df: DataFrame) -> Dict[str, Any]:
         """Enhanced data quality checks"""
+        # Import PySpark functions here to ensure Spark context is active
+        from pyspark.sql.functions import col, count, when, isnan, isnull
+        
         logger.info("Running comprehensive data quality checks...")
         
         total_rows = df.count()

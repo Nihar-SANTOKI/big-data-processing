@@ -34,7 +34,9 @@ except ImportError:
 
 class NYCTaxiDataPipeline:
     def __init__(self):
+        # Initialize Spark processor first to ensure Spark context is available
         self.spark_processor = SparkProcessor()
+        # Then initialize other components that might use Spark functions
         self.data_validator = DataValidator()
         self.storage_manager = storage_manager
         self.postgres_manager = PostgreSQLManager()
@@ -58,6 +60,7 @@ class NYCTaxiDataPipeline:
                 month_name = url.split('/')[-1].replace('.parquet', '')
                 logger.info(f"Processing {month_name}...")
 
+                # Read data first
                 df = self.spark_processor.read_parquet_from_url(url)
                 if df is None:
                     logger.error(f"Failed to read data from {url}")
@@ -66,13 +69,16 @@ class NYCTaxiDataPipeline:
                 initial_count = df.count()
                 logger.info(f"Initial dataset size: {initial_count:,} records")
 
+                # Validate schema first (doesn't use Spark functions heavily)
                 if not self.data_validator.validate_taxi_data_schema(df):
                     logger.error("Schema validation failed")
                     continue
 
+                # Now run quality validation (uses Spark functions)
                 quality_metrics = self.data_validator.validate_data_quality(df)
                 logger.info(f"Data quality score: {quality_metrics['overall_quality_score']}%")
 
+                # Continue with rest of processing...
                 cleaned_df = self.spark_processor.clean_taxi_data(df)
                 cleaned_count = cleaned_df.count()
                 logger.info(f"After cleaning: {cleaned_count:,} records")
