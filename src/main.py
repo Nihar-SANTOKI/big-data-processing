@@ -298,7 +298,11 @@ def main():
     logger = setup_logger(__name__)
     logger.info("=== NYC Taxi Data Processing Pipeline Started ===")
     logger.info(f"Storage mode: {'S3' if hasattr(storage_manager, 's3_client') else 'Local Files'}")
-    logger.info(f"Processing mode: {'Spark' if not hasattr('use_pandas_fallback') else 'Pandas Fallback'}")
+    
+    # Create a SparkProcessor instance to check processing mode
+    temp_processor = SparkProcessor()
+    processing_mode = 'Pandas Fallback' if temp_processor.use_pandas_fallback else 'Spark'
+    logger.info(f"Processing mode: {processing_mode}")
 
     pipeline = NYCTaxiDataPipeline()
 
