@@ -16,7 +16,13 @@ class S3Manager:
             aws_secret_access_key=settings.aws.secret_access_key,
             region_name=settings.aws.region
         )
-        self.bucket_name = settings.aws.s3_bucket
+        self.bucket_name = settings.aws.
+        
+        if not settings.aws.access_key_id or not settings.aws.s3_bucket:
+            logger.warning("AWS credentials not configured - S3 operations disabled")
+            self.s3_enabled = False
+        else:
+            self.s3_enabled = True
         
     def upload_file(self, local_file_path: str, s3_key: str) -> bool:
         """Upload a file to S3"""
@@ -30,6 +36,10 @@ class S3Manager:
     
     # IN s3_manager.py - Fix buffer handling
     def upload_dataframe(self, df: pd.DataFrame, s3_key: str, format: str = 'parquet') -> bool:
+        if not self.s3_enabled:
+            logger.info(f"S3 disabled - skipping upload of {s3_key}")
+            return True
+    
         try:
             import io
             
