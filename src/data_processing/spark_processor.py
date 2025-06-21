@@ -12,17 +12,25 @@ class SparkProcessor:
     def __init__(self):
         self.spark = self._create_spark_session()
         
+    # IN spark_processor.py - Add missing configs
     def _create_spark_session(self) -> SparkSession:
         spark = SparkSession.builder \
             .appName(settings.spark.app_name) \
             .master(settings.spark.master_url) \
             .config("spark.sql.adaptive.enabled", "true") \
             .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-            .config("spark.driver.maxResultSize", settings.spark.max_result_size) \
-            .config("spark.driver.memory", settings.spark.driver_memory) \
-            .config("spark.executor.memory", settings.spark.executor_memory) \
-            .config("spark.jars.packages", "org.postgresql:postgresql:42.7.0,org.apache.hadoop:hadoop-aws:3.3.0") \
+            .config("spark.driver.maxResultSize", "4g") \
+            .config("spark.driver.memory", "2g") \
+            .config("spark.executor.memory", "2g") \
+            .config("spark.executor.cores", "2") \
+            .config("spark.sql.shuffle.partitions", "200") \
+            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
+            .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
+            .config("spark.jars.packages", 
+                    "org.postgresql:postgresql:42.7.0,org.apache.hadoop:hadoop-aws:3.3.0,com.amazonaws:aws-java-sdk-bundle:1.12.262") \
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+            .config("spark.hadoop.fs.s3a.aws.credentials.provider", 
+                    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider") \
             .getOrCreate()
         
         spark.sparkContext.setLogLevel("WARN")

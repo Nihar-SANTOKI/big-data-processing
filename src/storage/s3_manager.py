@@ -27,22 +27,27 @@ class S3Manager:
             logger.error(f"Failed to upload file to S3: {e}")
             return False
     
+    # IN s3_manager.py - Fix buffer handling
     def upload_dataframe(self, df: pd.DataFrame, s3_key: str, format: str = 'parquet') -> bool:
-        """Upload pandas DataFrame to S3"""
         try:
+            import io
+            
             if format.lower() == 'parquet':
-                buffer = df.to_parquet()
+                # Fix: Use BytesIO buffer
+                buffer = io.BytesIO()
+                df.to_parquet(buffer, index=False)
+                buffer.seek(0)
+                body = buffer.getvalue()
             elif format.lower() == 'csv':
-                buffer = df.to_csv(index=False).encode()
+                body = df.to_csv(index=False).encode('utf-8')
             else:
                 raise ValueError(f"Unsupported format: {format}")
             
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=s3_key,
-                Body=buffer
+                Body=body
             )
-            logger.info(f"Successfully uploaded DataFrame to s3://{self.bucket_name}/{s3_key}")
             return True
         except Exception as e:
             logger.error(f"Failed to upload DataFrame to S3: {e}")

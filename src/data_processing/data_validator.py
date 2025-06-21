@@ -1,7 +1,7 @@
 import great_expectations as gx
 from great_expectations.core import ExpectationSuite
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, count, when, isnan  # Added missing imports
+from pyspark.sql.functions import col, count, when, isnan, isnull
 from typing import Dict, Any, List
 import pandas as pd
 from src.utils.logger import setup_logger
