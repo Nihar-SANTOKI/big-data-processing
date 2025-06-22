@@ -14,7 +14,7 @@ class PandasDataFrameWrapper:
     
     def __init__(self, df: pd.DataFrame):
         self._df = df
-        self.columns = df.columns.tolist()  # Add columns attribute
+        self.columns = df.columns.tolist()
     
     def count(self):
         return len(self._df)
@@ -23,17 +23,16 @@ class PandasDataFrameWrapper:
         return self._df.copy()
     
     def cache(self):
-        return self  # No-op for pandas
+        return self
     
     def unpersist(self):
-        return self  # No-op for pandas
+        return self
     
     def sample(self, fraction: float, seed: int = None):
         sampled = self._df.sample(frac=fraction, random_state=seed)
         return PandasDataFrameWrapper(sampled)
     
     def filter(self, condition):
-        # For pandas fallback, we'll need to handle basic filtering
         return self
     
     def select(self, *cols):
@@ -41,11 +40,9 @@ class PandasDataFrameWrapper:
         return PandasDataFrameWrapper(selected)
     
     def groupBy(self, *cols):
-        # Simplified groupBy for pandas
         return PandasGroupBy(self._df, list(cols))
     
     def withColumn(self, col_name: str, expr):
-        # Simplified withColumn - just return self for now
         return self
 
 class PandasGroupBy:
@@ -56,7 +53,6 @@ class PandasGroupBy:
         self._group_cols = group_cols
     
     def agg(self, *args, **kwargs):
-        # Simplified aggregation - return basic stats
         grouped = self._df.groupby(self._group_cols)
         result = grouped.agg({
             'fare_amount': ['count', 'sum', 'mean'],
@@ -156,17 +152,16 @@ class SparkProcessor:
         logger.info("Starting data cleaning process...")
         
         if isinstance(df, PandasDataFrameWrapper):
-            # Pandas-based cleaning
             pandas_df = df._df.copy()
             
-            # Apply basic filters
+            # Apply basic filters with proper null handling
             cleaned_df = pandas_df[
                 (pandas_df['fare_amount'] > 0) & 
                 (pandas_df['fare_amount'] < 500) &
                 (pandas_df['trip_distance'] > 0) & 
                 (pandas_df['trip_distance'] < 100) &
-                (pandas_df['passenger_count'] > 0) & 
-                (pandas_df['passenger_count'] <= 6) &
+                (pandas_df['passenger_count'].fillna(0) > 0) & 
+                (pandas_df['passenger_count'].fillna(0) <= 6) &
                 (pandas_df['tpep_pickup_datetime'].notna()) &
                 (pandas_df['tpep_dropoff_datetime'].notna()) &
                 (pandas_df['total_amount'] > 0) &
@@ -176,7 +171,6 @@ class SparkProcessor:
             logger.info(f"Cleaned data: {len(cleaned_df)} rows remaining from {len(pandas_df)}")
             return PandasDataFrameWrapper(cleaned_df)
         else:
-            # Spark-based cleaning (original code)
             logger.info(f"Available columns: {df.columns}")
             
             cleaned_df = df \
@@ -198,32 +192,56 @@ class SparkProcessor:
         logger.info("Adding derived features...")
         
         if isinstance(df, PandasDataFrameWrapper):
-            # Pandas-based feature engineering
             pandas_df = df._df.copy()
             
-            # Add basic derived columns
-            pandas_df['trip_date'] = pd.to_datetime(pandas_df['tpep_pickup_datetime']).dt.date
-            pandas_df['hour_of_day'] = pd.to_datetime(pandas_df['tpep_pickup_datetime']).dt.hour
-            pandas_df['day_of_week'] = pd.to_datetime(pandas_df['tpep_pickup_datetime']).dt.dayofweek + 1
+            # Ensure datetime columns are properly parsed
+            pandas_df['tpep_pickup_datetime'] = pd.to_datetime(pandas_df['tpep_pickup_datetime'])
+            pandas_df['tpep_dropoff_datetime'] = pd.to_datetime(pandas_df['tpep_dropoff_datetime'])
+            
+            # Add derived columns
+            pandas_df['trip_date'] = pandas_df['tpep_pickup_datetime'].dt.date
+            pandas_df['hour_of_day'] = pandas_df['tpep_pickup_datetime'].dt.hour
+            pandas_df['day_of_week'] = pandas_df['tpep_pickup_datetime'].dt.dayofweek + 1
             
             # Calculate trip duration in minutes
-            pickup = pd.to_datetime(pandas_df['tpep_pickup_datetime'])
-            dropoff = pd.to_datetime(pandas_df['tpep_dropoff_datetime'])
-            pandas_df['trip_duration_minutes'] = (dropoff - pickup).dt.total_seconds() / 60
+            pandas_df['trip_duration_minutes'] = (
+                pandas_df['tpep_dropoff_datetime'] - pandas_df['tpep_pickup_datetime']
+            ).dt.total_seconds() / 60
             
             # Add other features
             pandas_df['is_weekend'] = pandas_df['day_of_week'].isin([1, 7])
+            
+            # Create distance categories
             pandas_df['distance_category'] = pd.cut(
                 pandas_df['trip_distance'], 
                 bins=[0, 1, 5, 10, float('inf')], 
-                labels=['short', 'medium', 'long', 'very_long']
+                labels=['short', 'medium', 'long', 'very_long'],
+                include_lowest=True
             )
-            pandas_df['fare_per_mile'] = pandas_df['fare_amount'] / pandas_df['trip_distance'].replace(0, 1)
-            pandas_df['speed_mph'] = pandas_df['trip_distance'] / (pandas_df['trip_duration_minutes'] / 60).replace(0, 1)
+            
+            # Calculate fare per mile (avoid division by zero)
+            pandas_df['fare_per_mile'] = pandas_df['fare_amount'] / pandas_df['trip_distance'].replace(0, pd.NA)
+            
+            # Calculate speed (avoid division by zero)
+            pandas_df['speed_mph'] = pandas_df['trip_distance'] / (
+                pandas_df['trip_duration_minutes'] / 60
+            ).replace(0, pd.NA)
+            
+            # Convert data types for database compatibility
+            pandas_df['is_weekend'] = pandas_df['is_weekend'].astype(bool)
+            pandas_df['distance_category'] = pandas_df['distance_category'].astype(str)
+            pandas_df['trip_date'] = pandas_df['trip_date'].astype(str)
+            
+            # Handle VendorID column name mapping
+            if 'VendorID' in pandas_df.columns:
+                pandas_df['vendor_id'] = pandas_df['VendorID']
+            
+            # Clean up infinite values
+            pandas_df = pandas_df.replace([float('inf'), float('-inf')], pd.NA)
             
             return PandasDataFrameWrapper(pandas_df)
         else:
-            # Spark-based feature engineering (original code)
+            # Spark-based feature engineering
             enhanced_df = df \
                 .withColumn("trip_date", to_date(col("tpep_pickup_datetime"))) \
                 .withColumn("hour_of_day", hour(col("tpep_pickup_datetime"))) \
@@ -244,9 +262,93 @@ class SparkProcessor:
                 .withColumn("speed_mph", 
                         when(col("trip_duration_minutes") > 0, 
                                 col("trip_distance") / (col("trip_duration_minutes") / 60))
-                        .otherwise(0))
+                        .otherwise(0)) \
+                .withColumn("vendor_id", col("VendorID"))
             
             return enhanced_df
+    
+    def prepare_for_postgres(self, df) -> pd.DataFrame:
+        """Prepare DataFrame for PostgreSQL insertion with proper column mapping"""
+        if isinstance(df, PandasDataFrameWrapper):
+            pandas_df = df._df.copy()
+        else:
+            pandas_df = df.toPandas()
+        
+        # Define column mapping from source to PostgreSQL table
+        column_mapping = {
+            'VendorID': 'vendor_id',
+            'vendor_id': 'vendor_id',
+            'tpep_pickup_datetime': 'tpep_pickup_datetime',  # Keep original name
+            'tpep_dropoff_datetime': 'tpep_dropoff_datetime',  # Keep original name
+            'passenger_count': 'passenger_count',
+            'trip_distance': 'trip_distance',
+            'fare_amount': 'fare_amount',
+            'tip_amount': 'tip_amount',
+            'total_amount': 'total_amount',
+            'trip_date': 'trip_date',
+            'hour_of_day': 'hour_of_day',
+            'day_of_week': 'day_of_week',
+            'trip_duration_minutes': 'trip_duration_minutes',
+            'is_weekend': 'is_weekend',
+            'distance_category': 'distance_category',
+            'fare_per_mile': 'fare_per_mile'
+        }
+        
+        # Select only available columns
+        available_columns = [col for col in column_mapping.keys() if col in pandas_df.columns]
+        
+        if not available_columns:
+            logger.error(f"No matching columns found. Available: {pandas_df.columns.tolist()}")
+            return pd.DataFrame()
+        
+        postgres_data = pandas_df[available_columns].copy()
+        
+        # Rename columns to match PostgreSQL table schema
+        rename_dict = {col: column_mapping[col] for col in available_columns}
+        postgres_data = postgres_data.rename(columns=rename_dict)
+        
+        # Ensure proper data types
+        try:
+            if 'is_weekend' in postgres_data.columns:
+                postgres_data['is_weekend'] = postgres_data['is_weekend'].astype(bool)
+            
+            if 'distance_category' in postgres_data.columns:
+                postgres_data['distance_category'] = postgres_data['distance_category'].astype(str)
+                postgres_data['distance_category'] = postgres_data['distance_category'].replace('nan', 'unknown')
+            
+            if 'trip_date' in postgres_data.columns:
+                postgres_data['trip_date'] = postgres_data['trip_date'].astype(str)
+            
+            # Handle datetime columns
+            datetime_cols = ['tpep_pickup_datetime', 'tpep_dropoff_datetime']
+            for col in datetime_cols:
+                if col in postgres_data.columns:
+                    postgres_data[col] = pd.to_datetime(postgres_data[col])
+            
+            # Handle numeric columns
+            numeric_cols = ['fare_amount', 'trip_distance', 'tip_amount', 'total_amount', 
+                          'trip_duration_minutes', 'fare_per_mile']
+            for col in numeric_cols:
+                if col in postgres_data.columns:
+                    postgres_data[col] = pd.to_numeric(postgres_data[col], errors='coerce')
+            
+            # Remove rows with essential null values
+            essential_cols = ['fare_amount', 'trip_distance']
+            for col in essential_cols:
+                if col in postgres_data.columns:
+                    postgres_data = postgres_data.dropna(subset=[col])
+            
+            # Replace infinite values with NaN
+            postgres_data = postgres_data.replace([float('inf'), float('-inf')], pd.NA)
+            
+            logger.info(f"Prepared {len(postgres_data)} rows for PostgreSQL insertion")
+            logger.info(f"Final columns: {list(postgres_data.columns)}")
+            
+            return postgres_data
+            
+        except Exception as e:
+            logger.error(f"Error preparing data for PostgreSQL: {e}")
+            return pd.DataFrame()
     
     def calculate_daily_aggregations(self, df) -> DataFrame:
         """Calculate daily trip statistics"""
@@ -254,6 +356,14 @@ class SparkProcessor:
         
         if isinstance(df, PandasDataFrameWrapper):
             pandas_df = df._df.copy()
+            
+            # Ensure trip_date is available
+            if 'trip_date' not in pandas_df.columns:
+                if 'tpep_pickup_datetime' in pandas_df.columns:
+                    pandas_df['trip_date'] = pd.to_datetime(pandas_df['tpep_pickup_datetime']).dt.date
+                else:
+                    logger.error("No date column available for daily aggregations")
+                    return PandasDataFrameWrapper(pd.DataFrame())
             
             daily_stats = pandas_df.groupby('trip_date').agg({
                 'fare_amount': ['count', 'sum', 'mean'],
@@ -263,13 +373,21 @@ class SparkProcessor:
                 'total_amount': 'sum'
             }).reset_index()
             
-            # Flatten column names
+            # Flatten column names properly
             daily_stats.columns = [
                 'trip_date', 'total_trips', 'total_revenue', 'avg_fare_amount',
-                'avg_trip_distance', 'avg_tip_amount', 'avg_trip_duration'
+                'avg_trip_distance', 'avg_tip_amount', 'avg_trip_duration', 'total_amount_sum'
             ]
             
+            # Drop the extra column and rename if needed
+            if 'total_amount_sum' in daily_stats.columns:
+                daily_stats = daily_stats.drop('total_amount_sum', axis=1)
+            
             daily_stats = daily_stats.sort_values('trip_date')
+            
+            # Convert trip_date to string for consistency
+            daily_stats['trip_date'] = daily_stats['trip_date'].astype(str)
+            
             return PandasDataFrameWrapper(daily_stats)
         else:
             daily_stats = df.groupBy("trip_date") \
@@ -291,6 +409,14 @@ class SparkProcessor:
         
         if isinstance(df, PandasDataFrameWrapper):
             pandas_df = df._df.copy()
+            
+            # Ensure hour_of_day is available
+            if 'hour_of_day' not in pandas_df.columns:
+                if 'tpep_pickup_datetime' in pandas_df.columns:
+                    pandas_df['hour_of_day'] = pd.to_datetime(pandas_df['tpep_pickup_datetime']).dt.hour
+                else:
+                    logger.error("No datetime column available for hourly patterns")
+                    return PandasDataFrameWrapper(pd.DataFrame())
             
             hourly_stats = pandas_df.groupby('hour_of_day').agg({
                 'fare_amount': ['count', 'mean'],
