@@ -102,7 +102,7 @@ class NYCTaxiDataPipeline:
                 self.spark_processor.write_to_hdfs(enhanced_df, hdfs_path)
 
                 # Sample data for PostgreSQL
-                sample_df = enhanced_df.sample(fraction=0.1, seed=42)
+                sample_df = enhanced_df.sample(fraction=0.01, seed=42)  # Reduced sample size
                 sample_pandas = sample_df.toPandas()
 
                 # Prepare data for PostgreSQL with proper column mapping
@@ -124,16 +124,25 @@ class NYCTaxiDataPipeline:
                     'fare_per_mile': 'fare_per_mile'
                 }
                 
-                # Select only available columns
+                # Select only available columns and ensure proper data types
                 available_columns = [col for col in postgres_columns.keys() if col in sample_pandas.columns]
-                postgres_data = sample_pandas[available_columns].rename(columns={
+                postgres_data = sample_pandas[available_columns].copy()
+                
+                # Rename columns
+                postgres_data = postgres_data.rename(columns={
                     col: postgres_columns[col] for col in available_columns
                 })
                 
+                # Clean data for PostgreSQL insertion
+                postgres_data = postgres_data.dropna(subset=['fare_amount', 'trip_distance'])
+                
                 # Insert into PostgreSQL
                 try:
-                    self.postgres_manager.insert_dataframe(postgres_data, 'taxi_trips_processed')
-                    logger.info("Successfully inserted sample data into PostgreSQL")
+                    success = self.postgres_manager.insert_dataframe(postgres_data, 'taxi_trips_processed')
+                    if success:
+                        logger.info("Successfully inserted sample data into PostgreSQL")
+                    else:
+                        logger.error("Failed to insert sample data into PostgreSQL")
                 except Exception as e:
                     logger.error(f"Failed to insert into PostgreSQL: {e}")
 
@@ -142,12 +151,26 @@ class NYCTaxiDataPipeline:
                     daily_stats = self.spark_processor.calculate_daily_aggregations(enhanced_df)
                     daily_pandas = daily_stats.toPandas()
                     
-                    # Ensure column names match database schema
-                    if 'total_revenue' not in daily_pandas.columns and 'total_amount_sum' in daily_pandas.columns:
+                    # Clean column names for database
+                    daily_pandas.columns = [col.replace('_', '') if col.endswith('_') else col for col in daily_pandas.columns]
+                    
+                    # Ensure we have the right columns
+                    expected_cols = ['trip_date', 'total_trips', 'total_revenue', 'avg_trip_distance', 'avg_fare_amount', 'avg_tip_amount', 'avg_trip_duration']
+                    if 'total_amount_sum' in daily_pandas.columns:
                         daily_pandas['total_revenue'] = daily_pandas['total_amount_sum']
                     
-                    self.postgres_manager.insert_dataframe(daily_pandas, 'daily_trip_stats', 'replace')
-                    logger.info("Successfully inserted daily stats into PostgreSQL")
+                    # Select only existing columns
+                    existing_cols = [col for col in expected_cols if col in daily_pandas.columns]
+                    if existing_cols:
+                        daily_clean = daily_pandas[existing_cols].copy()
+                        success = self.postgres_manager.insert_dataframe(daily_clean, 'daily_trip_stats', 'replace')
+                        if success:
+                            logger.info("Successfully inserted daily stats into PostgreSQL")
+                        else:
+                            logger.error("Failed to insert daily stats")
+                    else:
+                        logger.error("No matching columns found for daily stats")
+                        
                 except Exception as e:
                     logger.error(f"Failed to calculate/insert daily stats: {e}")
                     daily_stats = None
@@ -155,30 +178,34 @@ class NYCTaxiDataPipeline:
                 try:
                     hourly_stats = self.spark_processor.calculate_hourly_patterns(enhanced_df)
                     hourly_pandas = hourly_stats.toPandas()
+                    logger.info("Successfully calculated hourly patterns")
                 except Exception as e:
                     logger.error(f"Failed to calculate hourly patterns: {e}")
                     hourly_stats = None
+                    hourly_pandas = None
 
                 # Upload analytics to storage
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 
-                if daily_stats:
+                if daily_stats and 'daily_pandas' in locals():
                     try:
                         self.storage_manager.upload_dataframe(
                             daily_pandas,
                             f"analytics/daily_stats_{month_name}_{timestamp}.parquet", 
                             'parquet'
                         )
+                        logger.info("Successfully uploaded daily stats to storage")
                     except Exception as e:
                         logger.error(f"Failed to upload daily stats: {e}")
 
-                if hourly_stats:
+                if hourly_stats and hourly_pandas is not None:
                     try:
                         self.storage_manager.upload_dataframe(
                             hourly_pandas,
                             f"analytics/hourly_patterns_{month_name}_{timestamp}.parquet", 
                             'parquet'
                         )
+                        logger.info("Successfully uploaded hourly patterns to storage")
                     except Exception as e:
                         logger.error(f"Failed to upload hourly patterns: {e}")
 
@@ -190,6 +217,7 @@ class NYCTaxiDataPipeline:
                         f"quality/quality_metrics_{month_name}_{timestamp}.csv", 
                         'csv'
                     )
+                    logger.info("Successfully uploaded quality metrics to storage")
                 except Exception as e:
                     logger.error(f"Failed to upload quality metrics: {e}")
 

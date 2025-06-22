@@ -1,9 +1,11 @@
+# src/storage/postgres_manager.py
 import psycopg2
 import pandas as pd
 from typing import Optional, Dict, Any, List
 from contextlib import contextmanager
 from src.config.settings import settings
 from src.utils.logger import setup_logger
+from sqlalchemy import create_engine
 import psycopg2.pool
 
 logger = setup_logger(__name__)
@@ -17,8 +19,12 @@ class PostgreSQLManager:
             'user': settings.postgres.username,
             'password': settings.postgres.password
         }
-        # Add connection pooling
-        self.pool = psycopg2.pool.SimpleConnectionPool(1, 10, **self.connection_params)
+        
+        # Create SQLAlchemy engine for pandas.to_sql()
+        connection_string = f"postgresql://{settings.postgres.username}:{settings.postgres.password}@{settings.postgres.host}:{settings.postgres.port}/{settings.postgres.database}"
+        self.engine = create_engine(connection_string)
+        
+        logger.info(f"PostgreSQL connection initialized for {settings.postgres.host}:{settings.postgres.port}/{settings.postgres.database}")
     
     @contextmanager
     def get_connection(self):
@@ -52,7 +58,7 @@ class PostgreSQLManager:
     def fetch_data(self, query: str, params: Optional[tuple] = None) -> Optional[pd.DataFrame]:
         """Fetch data and return as pandas DataFrame"""
         try:
-            with self.get_connection() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql_query(query, conn, params=params)
                 logger.info(f"Fetched {len(df)} rows from database")
                 return df
@@ -63,19 +69,28 @@ class PostgreSQLManager:
     def insert_dataframe(self, df: pd.DataFrame, table_name: str, if_exists: str = 'append') -> bool:
         """Insert pandas DataFrame into PostgreSQL table"""
         try:
-            with self.get_connection() as conn:
-                df.to_sql(
-                    table_name, 
-                    conn, 
-                    if_exists=if_exists, 
-                    index=False, 
-                    method='multi',
-                    chunksize=1000
-                )
-                logger.info(f"Inserted {len(df)} rows into {table_name}")
-                return True
+            # Convert datetime columns to string to avoid timezone issues
+            df_copy = df.copy()
+            for col in df_copy.columns:
+                if df_copy[col].dtype == 'datetime64[ns]':
+                    df_copy[col] = df_copy[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+                elif df_copy[col].dtype == 'object' and col in ['trip_date']:
+                    # Handle date objects
+                    df_copy[col] = pd.to_datetime(df_copy[col], errors='coerce').dt.strftime('%Y-%m-%d')
+            
+            # Use SQLAlchemy engine instead of raw connection
+            rows_inserted = df_copy.to_sql(
+                table_name, 
+                self.engine, 
+                if_exists=if_exists, 
+                index=False, 
+                method='multi',
+                chunksize=1000
+            )
+            logger.info(f"Inserted {len(df_copy)} rows into {table_name}")
+            return True
         except Exception as e:
-            logger.error(f"Failed to insert DataFrame: {e}")
+            logger.error(f"Failed to insert DataFrame into {table_name}: {e}")
             return False
     
     def create_tables(self) -> bool:
@@ -112,24 +127,26 @@ class PostgreSQLManager:
             hour_of_day INTEGER,
             day_of_week INTEGER,
             vendor_id INTEGER,
-            passenger_count INTEGER,
+            passenger_count DECIMAL(8,2),
             trip_distance DECIMAL(8,2),
-            trip_duration_minutes INTEGER,
+            trip_duration_minutes DECIMAL(8,2),
             fare_amount DECIMAL(8,2),
             tip_amount DECIMAL(8,2),
             total_amount DECIMAL(8,2),
             payment_type INTEGER,
-            rate_code_id INTEGER,
+            rate_code_id DECIMAL(8,2),
             is_weekend BOOLEAN,
             distance_category VARCHAR(20),
             fare_per_mile DECIMAL(8,2),
+            pickup_datetime TIMESTAMP,
+            dropoff_datetime TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
         -- Daily aggregations table
         CREATE TABLE IF NOT EXISTS daily_trip_stats (
             id SERIAL PRIMARY KEY,
-            trip_date DATE UNIQUE,
+            trip_date DATE,
             total_trips INTEGER,
             total_revenue DECIMAL(12,2),
             avg_trip_distance DECIMAL(8,2),
