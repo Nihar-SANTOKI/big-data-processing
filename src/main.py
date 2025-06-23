@@ -40,10 +40,15 @@ class NYCTaxiDataPipeline:
         # Try to initialize PostgreSQL with better error handling
         try:
             self.postgres_manager = PostgreSQLManager()
-            logger.info("PostgreSQL manager initialized successfully")
+            if self.postgres_manager.connection_available:
+                logger.info("PostgreSQL manager initialized successfully")
+            else:
+                logger.warning("PostgreSQL manager created but connection not available")
+                self.postgres_manager = None
         except Exception as e:
             logger.error(f"Failed to initialize PostgreSQL manager: {e}")
             logger.warning("Pipeline will continue without PostgreSQL storage")
+            self.postgres_manager = None
 
     def setup_database(self) -> bool:
         """Setup database tables with better error handling"""
@@ -110,7 +115,8 @@ class NYCTaxiDataPipeline:
                 # Write to HDFS (skip for pandas fallback)
                 hdfs_path = f"{settings.data.hdfs_base_path}/processed/{month_name}"
                 try:
-                    self.spark_processor.write_to_hdfs(enhanced_df, hdfs_path)
+                    if hasattr(self.spark_processor, 'write_to_hdfs'):
+                        self.spark_processor.write_to_hdfs(enhanced_df, hdfs_path)
                 except Exception as e:
                     logger.warning(f"HDFS write failed (expected with pandas fallback): {e}")
 
@@ -124,57 +130,33 @@ class NYCTaxiDataPipeline:
 
                     # Only try PostgreSQL if it's available
                     if self.postgres_manager:
-                        # Fix column mapping - check what columns actually exist
-                        logger.info(f"Sample DataFrame columns: {sample_pandas.columns.tolist()}")
+                        # Prepare data for PostgreSQL using the method from spark_processor
+                        postgres_df = self.spark_processor.prepare_for_postgres(enhanced_df)
                         
-                        # Map based on what's actually available
-                        postgres_columns = {}
-                        
-                        # Map existing columns to PostgreSQL schema
-                        if 'VendorID' in sample_pandas.columns:
-                            postgres_columns['VendorID'] = 'vendor_id'
-                        if 'tpep_pickup_datetime' in sample_pandas.columns:
-                            postgres_columns['tpep_pickup_datetime'] = 'pickup_datetime'
-                        if 'tpep_dropoff_datetime' in sample_pandas.columns:
-                            postgres_columns['tpep_dropoff_datetime'] = 'dropoff_datetime'
-                        
-                        # Add other columns that exist
-                        for col in ['passenger_count', 'trip_distance', 'fare_amount', 'tip_amount', 
-                                   'total_amount', 'trip_date', 'hour_of_day', 'day_of_week', 
-                                   'trip_duration_minutes', 'is_weekend', 'distance_category', 'fare_per_mile']:
-                            if col in sample_pandas.columns:
-                                postgres_columns[col] = col
-                        
-                        # Select only available columns
-                        available_columns = list(postgres_columns.keys())
-                        if available_columns:
-                            postgres_data = sample_pandas[available_columns].copy()
-                            
-                            # Rename columns
-                            postgres_data = postgres_data.rename(columns=postgres_columns)
-
-                            # Convert data types
-                            if 'is_weekend' in postgres_data.columns:
-                                postgres_data['is_weekend'] = postgres_data['is_weekend'].astype(bool)
-                            
-                            if 'distance_category' in postgres_data.columns:
-                                postgres_data['distance_category'] = postgres_data['distance_category'].astype(str)
-                                                    
-                            # Clean data for PostgreSQL insertion
-                            if 'fare_amount' in postgres_data.columns and 'trip_distance' in postgres_data.columns:
-                                postgres_data = postgres_data.dropna(subset=['fare_amount', 'trip_distance'])
-                            
-                            # Insert into PostgreSQL
-                            try:
-                                success = self.postgres_manager.insert_dataframe(postgres_data, 'taxi_trips_processed')
-                                if success:
-                                    logger.info("Successfully inserted sample data into PostgreSQL")
-                                else:
-                                    logger.error("Failed to insert sample data into PostgreSQL")
-                            except Exception as e:
-                                logger.error(f"Failed to insert into PostgreSQL: {e}")
+                        if hasattr(postgres_df, 'toPandas'):
+                            postgres_pandas = postgres_df.toPandas()
                         else:
-                            logger.warning("No matching columns found for PostgreSQL insertion")
+                            postgres_pandas = postgres_df
+                        
+                        # Take a sample for insertion
+                        if len(postgres_pandas) > 1000:
+                            postgres_sample = postgres_pandas.sample(n=1000, random_state=42)
+                        else:
+                            postgres_sample = postgres_pandas
+                        
+                        # Insert into PostgreSQL
+                        try:
+                            success = self.postgres_manager.insert_dataframe(
+                                postgres_sample, 
+                                'taxi_trips_processed',
+                                if_exists='append'
+                            )
+                            if success:
+                                logger.info("Successfully inserted sample data into PostgreSQL")
+                            else:
+                                logger.error("Failed to insert sample data into PostgreSQL")
+                        except Exception as e:
+                            logger.error(f"Failed to insert into PostgreSQL: {e}")
                     else:
                         logger.info("PostgreSQL not available, skipping database insertion")
                         
@@ -182,90 +164,93 @@ class NYCTaxiDataPipeline:
                     logger.error(f"Failed to prepare sample data: {e}")
 
                 # Calculate aggregations with better error handling
-                daily_stats = None
-                daily_pandas = None
                 try:
-                    daily_stats = self.spark_processor.calculate_daily_aggregations(enhanced_df)
-                    if hasattr(daily_stats, 'toPandas'):
-                        daily_pandas = daily_stats.toPandas()
+                    # Use existing methods from spark_processor
+                    vendor_stats = self.spark_processor.calculate_aggregations(enhanced_df)
+                    distance_stats = self.spark_processor.calculate_distance_patterns(enhanced_df)
+                    payment_stats = self.spark_processor.calculate_payment_patterns(enhanced_df)
+                    
+                    # Convert to pandas for storage
+                    if hasattr(vendor_stats, 'toPandas'):
+                        vendor_pandas = vendor_stats.toPandas()
+                        distance_pandas = distance_stats.toPandas()
+                        payment_pandas = payment_stats.toPandas()
                     else:
-                        daily_pandas = daily_stats
+                        vendor_pandas = vendor_stats
+                        distance_pandas = distance_stats
+                        payment_pandas = payment_stats
                     
-                    logger.info(f"Daily stats columns: {daily_pandas.columns.tolist()}")
+                    logger.info("Successfully calculated aggregations")
                     
-                    if self.postgres_manager and len(daily_pandas) > 0:
-                        # Create a clean copy with standard column names
-                        daily_clean = daily_pandas.copy()
-                        
-                        # Map columns to expected names
-                        column_mapping = {
-                            'trip_date': 'trip_date',
-                            'total_trips': 'total_trips',
-                            'total_revenue': 'total_revenue',
-                            'avg_trip_distance': 'avg_trip_distance',
-                            'avg_fare_amount': 'avg_fare_amount',
-                            'avg_tip_amount': 'avg_tip_amount',
-                            'avg_trip_duration': 'avg_trip_duration'
-                        }
-                        
-                        # Only keep columns that exist
-                        existing_cols = [col for col in column_mapping.keys() if col in daily_clean.columns]
-                        if existing_cols:
-                            daily_final = daily_clean[existing_cols].copy()
-                            success = self.postgres_manager.insert_dataframe(daily_final, 'daily_trip_stats', 'replace')
+                    # Insert aggregated stats into PostgreSQL if available
+                    if self.postgres_manager:
+                        try:
+                            # Create summary stats for daily_trip_stats table
+                            summary_stats = pd.DataFrame([{
+                                'total_trips': int(vendor_pandas['total_trips'].sum()),
+                                'total_revenue': float(vendor_pandas['total_revenue'].sum()),
+                                'avg_trip_distance': float(vendor_pandas['avg_trip_distance'].mean()),
+                                'avg_fare_amount': float(vendor_pandas['avg_fare_amount'].mean()),
+                                'avg_tip_amount': float(vendor_pandas['avg_tip_amount'].mean())
+                            }])
+                            
+                            success = self.postgres_manager.insert_dataframe(
+                                summary_stats, 
+                                'daily_trip_stats', 
+                                if_exists='append'
+                            )
                             if success:
-                                logger.info("Successfully inserted daily stats into PostgreSQL")
-                            else:
-                                logger.error("Failed to insert daily stats")
-                        else:
-                            logger.warning("No matching columns found for daily stats")
+                                logger.info("Successfully inserted summary stats into PostgreSQL")
+                        except Exception as e:
+                            logger.error(f"Failed to insert summary stats: {e}")
                             
                 except Exception as e:
-                    logger.error(f"Failed to calculate/insert daily stats: {e}")
-
-                # Calculate hourly patterns
-                hourly_stats = None
-                hourly_pandas = None
-                try:
-                    hourly_stats = self.spark_processor.calculate_hourly_patterns(enhanced_df)
-                    if hasattr(hourly_stats, 'toPandas'):
-                        hourly_pandas = hourly_stats.toPandas()
-                    else:
-                        hourly_pandas = hourly_stats
-                    logger.info("Successfully calculated hourly patterns")
-                except Exception as e:
-                    logger.error(f"Failed to calculate hourly patterns: {e}")
+                    logger.error(f"Failed to calculate aggregations: {e}")
+                    vendor_pandas = None
+                    distance_pandas = None
+                    payment_pandas = None
 
                 # Upload analytics to local storage
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 
-                if daily_pandas is not None and len(daily_pandas) > 0:
+                # Upload vendor statistics
+                if 'vendor_pandas' in locals() and vendor_pandas is not None and len(vendor_pandas) > 0:
                     try:
                         success = self.storage_manager.upload_dataframe(
-                            daily_pandas,
-                            f"analytics/daily_stats_{month_name}_{timestamp}.parquet", 
+                            vendor_pandas,
+                            f"analytics/vendor_stats_{month_name}_{timestamp}.parquet", 
                             'parquet'
                         )
                         if success:
-                            logger.info("Successfully uploaded daily stats to local storage")
-                        else:
-                            logger.error("Failed to upload daily stats to local storage")
+                            logger.info("Successfully uploaded vendor stats to local storage")
                     except Exception as e:
-                        logger.error(f"Failed to upload daily stats: {e}")
+                        logger.error(f"Failed to upload vendor stats: {e}")
 
-                if hourly_pandas is not None and len(hourly_pandas) > 0:
+                # Upload distance patterns
+                if 'distance_pandas' in locals() and distance_pandas is not None and len(distance_pandas) > 0:
                     try:
                         success = self.storage_manager.upload_dataframe(
-                            hourly_pandas,
-                            f"analytics/hourly_patterns_{month_name}_{timestamp}.parquet", 
+                            distance_pandas,
+                            f"analytics/distance_patterns_{month_name}_{timestamp}.parquet", 
                             'parquet'
                         )
                         if success:
-                            logger.info("Successfully uploaded hourly patterns to local storage")
-                        else:
-                            logger.error("Failed to upload hourly patterns to local storage")
+                            logger.info("Successfully uploaded distance patterns to local storage")
                     except Exception as e:
-                        logger.error(f"Failed to upload hourly patterns: {e}")
+                        logger.error(f"Failed to upload distance patterns: {e}")
+
+                # Upload payment patterns
+                if 'payment_pandas' in locals() and payment_pandas is not None and len(payment_pandas) > 0:
+                    try:
+                        success = self.storage_manager.upload_dataframe(
+                            payment_pandas,
+                            f"analytics/payment_patterns_{month_name}_{timestamp}.parquet", 
+                            'parquet'
+                        )
+                        if success:
+                            logger.info("Successfully uploaded payment patterns to local storage")
+                    except Exception as e:
+                        logger.error(f"Failed to upload payment patterns: {e}")
 
                 # Upload quality metrics
                 if quality_metrics:
@@ -278,8 +263,6 @@ class NYCTaxiDataPipeline:
                         )
                         if success:
                             logger.info("Successfully uploaded quality metrics to local storage")
-                        else:
-                            logger.error("Failed to upload quality metrics to local storage")
                     except Exception as e:
                         logger.error(f"Failed to upload quality metrics: {e}")
 
@@ -312,76 +295,68 @@ class NYCTaxiDataPipeline:
             # Try PostgreSQL first if available
             if self.postgres_manager:
                 try:
-                    # Query daily statistics
-                    daily_query = """
-                    SELECT trip_date, total_trips, total_revenue, avg_trip_distance,
-                           avg_fare_amount, avg_tip_amount, avg_trip_duration
+                    # Query summary statistics
+                    summary_query = """
+                    SELECT total_trips, total_revenue, avg_trip_distance,
+                           avg_fare_amount, avg_tip_amount
                     FROM daily_trip_stats
-                    ORDER BY trip_date DESC LIMIT 100
+                    ORDER BY id DESC LIMIT 10
                     """
-                    daily_data = self.postgres_manager.fetch_data(daily_query)
+                    summary_data = self.postgres_manager.fetch_data(summary_query)
 
-                    # Query weekend analysis
-                    weekend_query = """
-                    SELECT is_weekend, COUNT(*) AS trip_count, AVG(fare_amount) AS avg_fare,
-                           AVG(tip_amount) AS avg_tip, AVG(trip_distance) AS avg_distance
+                    # Query processed trip data
+                    trips_query = """
+                    SELECT vendor_id, distance_category, COUNT(*) AS trip_count, 
+                           AVG(fare_amount) AS avg_fare, AVG(tip_amount) AS avg_tip,
+                           AVG(trip_distance) AS avg_distance
                     FROM taxi_trips_processed 
-                    GROUP BY is_weekend
+                    GROUP BY vendor_id, distance_category
+                    ORDER BY vendor_id, distance_category
+                    LIMIT 100
                     """
-                    weekend_data = self.postgres_manager.fetch_data(weekend_query)
+                    trips_data = self.postgres_manager.fetch_data(trips_query)
 
-                    if daily_data is not None and len(daily_data) > 0:
+                    if summary_data is not None and len(summary_data) > 0:
                         success = self.storage_manager.upload_dataframe(
-                            daily_data,
-                            f"reports/daily_analytics_{timestamp}.csv", 
+                            summary_data,
+                            f"reports/summary_analytics_{timestamp}.csv", 
                             'csv'
                         )
                         if success:
-                            logger.info(f"Generated daily analytics report with {len(daily_data)} records")
+                            logger.info(f"Generated summary analytics report with {len(summary_data)} records")
                             reports_generated += 1
-                        else:
-                            logger.error("Failed to upload daily analytics report")
-                    else:
-                        logger.warning("No daily data available for report")
 
-                    if weekend_data is not None and len(weekend_data) > 0:
+                    if trips_data is not None and len(trips_data) > 0:
                         success = self.storage_manager.upload_dataframe(
-                            weekend_data,
-                            f"reports/weekend_analysis_{timestamp}.csv", 
+                            trips_data,
+                            f"reports/trips_analysis_{timestamp}.csv", 
                             'csv'
                         )
                         if success:
-                            logger.info(f"Generated weekend analysis report with {len(weekend_data)} records")
+                            logger.info(f"Generated trips analysis report with {len(trips_data)} records")
                             reports_generated += 1
-                        else:
-                            logger.error("Failed to upload weekend analysis report")
-                    else:
-                        logger.warning("No weekend data available for report")
 
-                    # Generate summary statistics
-                    if daily_data is not None and len(daily_data) > 0:
-                        summary_stats = {
+                    # Generate pipeline summary from available data
+                    if summary_data is not None and len(summary_data) > 0:
+                        pipeline_summary = {
                             'execution_date': datetime.now().isoformat(),
-                            'total_records': len(daily_data),
-                            'total_trips': int(daily_data['total_trips'].sum()) if 'total_trips' in daily_data.columns else 0,
-                            'total_revenue': float(daily_data['total_revenue'].sum()) if 'total_revenue' in daily_data.columns else 0,
-                            'avg_distance': float(daily_data['avg_trip_distance'].mean()) if 'avg_trip_distance' in daily_data.columns else 0,
-                            'avg_fare': float(daily_data['avg_fare_amount'].mean()) if 'avg_fare_amount' in daily_data.columns else 0
+                            'total_records': len(summary_data),
+                            'total_trips': int(summary_data['total_trips'].sum()) if 'total_trips' in summary_data.columns else 0,
+                            'total_revenue': float(summary_data['total_revenue'].sum()) if 'total_revenue' in summary_data.columns else 0,
+                            'avg_distance': float(summary_data['avg_trip_distance'].mean()) if 'avg_trip_distance' in summary_data.columns else 0,
+                            'avg_fare': float(summary_data['avg_fare_amount'].mean()) if 'avg_fare_amount' in summary_data.columns else 0,
+                            'data_source': 'PostgreSQL'
                         }
                         
-                        summary_df = pd.DataFrame([summary_stats])
+                        summary_df = pd.DataFrame([pipeline_summary])
                         success = self.storage_manager.upload_dataframe(
                             summary_df,
                             f"reports/pipeline_summary_{timestamp}.csv", 
                             'csv'
                         )
                         if success:
-                            logger.info(f"Pipeline Summary: {summary_stats}")
+                            logger.info(f"Pipeline Summary: {pipeline_summary}")
                             reports_generated += 1
-                        else:
-                            logger.error("Failed to upload pipeline summary")
-                    else:
-                        logger.warning("No data available for summary statistics")
                         
                 except Exception as e:
                     logger.error(f"Failed to generate PostgreSQL-based reports: {e}")
@@ -396,7 +371,8 @@ class NYCTaxiDataPipeline:
                     'analytics_files': len([f for f in files if 'analytics/' in f]),
                     'quality_files': len([f for f in files if 'quality/' in f]),
                     'report_files': len([f for f in files if 'reports/' in f]),
-                    'storage_type': 'Local'
+                    'storage_type': 'Local',
+                    'storage_path': os.path.abspath(self.storage_manager.base_path)
                 }
                 
                 report_df = pd.DataFrame([report_data])
@@ -409,12 +385,10 @@ class NYCTaxiDataPipeline:
                 if success:
                     logger.info(f"Generated storage summary report: {report_data}")
                     reports_generated += 1
-                else:
-                    logger.error("Failed to generate storage summary report")
                 
                 logger.info(f"Generated {len(files)} total files, {reports_generated} reports in this run")
                 if files:
-                    logger.info(f"Sample files: {files[:5]}...")
+                    logger.info(f"Files generated: {files}")
                     
             except Exception as e:
                 logger.error(f"Failed to generate file-based report: {e}")
@@ -436,8 +410,9 @@ def main():
     
     # Create a SparkProcessor instance to check processing mode
     temp_processor = SparkProcessor()
-    processing_mode = 'Pandas Fallback' if temp_processor.use_pandas_fallback else 'Spark'
+    processing_mode = 'Pandas Fallback' if hasattr(temp_processor, 'use_pandas_fallback') and temp_processor.use_pandas_fallback else 'Spark'
     logger.info(f"Processing mode: {processing_mode}")
+    temp_processor.stop()
 
     pipeline = NYCTaxiDataPipeline()
 
