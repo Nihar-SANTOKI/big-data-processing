@@ -6,7 +6,7 @@ DROP TABLE IF EXISTS daily_trip_stats;
 DROP TABLE IF EXISTS taxi_trips_processed;
 DROP TABLE IF EXISTS taxi_trips_raw;
 
--- Raw taxi trips table (removed datetime columns)
+-- Raw taxi trips table (removed all datetime columns)
 CREATE TABLE taxi_trips_raw (
     id SERIAL PRIMARY KEY,
     vendor_id INTEGER,
@@ -27,22 +27,22 @@ CREATE TABLE taxi_trips_raw (
     total_amount DECIMAL(8,2)
 );
 
--- Processed taxi trips table (removed datetime columns)
+-- Processed taxi trips table (removed all datetime columns)
 CREATE TABLE taxi_trips_processed (
     id SERIAL PRIMARY KEY,
     vendor_id INTEGER,
-    passenger_count INTEGER,
-    trip_distance DECIMAL(8,2),
-    fare_amount DECIMAL(8,2),
-    tip_amount DECIMAL(8,2),
-    total_amount DECIMAL(8,2),
+    passenger_count FLOAT,
+    trip_distance FLOAT,
+    fare_amount FLOAT,
+    tip_amount FLOAT,
+    total_amount FLOAT,
     payment_type INTEGER,
     rate_code_id INTEGER,
     distance_category VARCHAR(20),
-    fare_per_mile DECIMAL(8,2)
+    fare_per_mile FLOAT
 );
 
--- Daily aggregations table (simplified)
+-- Daily aggregations table (simplified without date)
 CREATE TABLE daily_trip_stats (
     id SERIAL PRIMARY KEY,
     total_trips INTEGER,
@@ -56,7 +56,7 @@ CREATE TABLE daily_trip_stats (
 CREATE INDEX idx_taxi_trips_raw_vendor_id ON taxi_trips_raw(vendor_id);
 CREATE INDEX idx_taxi_trips_processed_vendor_id ON taxi_trips_processed(vendor_id);
 
--- Create views for common queries (simplified)
+-- Create views for common queries (no datetime references)
 CREATE OR REPLACE VIEW distance_summary AS
 SELECT 
     distance_category,

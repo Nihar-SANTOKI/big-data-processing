@@ -60,29 +60,34 @@ class SparkProcessor:
         # Original count
         original_count = df.count()
         
-        # Basic cleaning - removed datetime filters
+        # Basic cleaning - removed all datetime filters
         cleaned_df = df \
             .filter(col("fare_amount") > 0) \
             .filter(col("fare_amount") < 500) \
             .filter(col("trip_distance") > 0) \
             .filter(col("trip_distance") < 100) \
             .filter(col("passenger_count") > 0) \
-            .filter(col("passenger_count") <= 6)
+            .filter(col("passenger_count") <= 6) \
+            .filter(col("total_amount") > 0) \
+            .filter(col("total_amount") < 1000)
         
         # Remove outliers using IQR for fare_amount
-        quantiles = cleaned_df.select(
-            expr("percentile_approx(fare_amount, 0.25)").alias("q1"),
-            expr("percentile_approx(fare_amount, 0.75)").alias("q3")
-        ).collect()[0]
-        
-        iqr = quantiles["q3"] - quantiles["q1"]
-        lower_bound = quantiles["q1"] - 1.5 * iqr
-        upper_bound = quantiles["q3"] + 1.5 * iqr
-        
-        cleaned_df = cleaned_df.filter(
-            (col("fare_amount") >= lower_bound) & 
-            (col("fare_amount") <= upper_bound)
-        )
+        try:
+            quantiles = cleaned_df.select(
+                expr("percentile_approx(fare_amount, 0.25)").alias("q1"),
+                expr("percentile_approx(fare_amount, 0.75)").alias("q3")
+            ).collect()[0]
+            
+            iqr = quantiles["q3"] - quantiles["q1"]
+            lower_bound = quantiles["q1"] - 1.5 * iqr
+            upper_bound = quantiles["q3"] + 1.5 * iqr
+            
+            cleaned_df = cleaned_df.filter(
+                (col("fare_amount") >= lower_bound) & 
+                (col("fare_amount") <= upper_bound)
+            )
+        except Exception as e:
+            logger.warning(f"Could not apply IQR outlier removal: {e}")
         
         final_count = cleaned_df.count()
         logger.info(f"Data cleaning completed. Rows: {original_count} -> {final_count}")
@@ -101,6 +106,9 @@ class SparkProcessor:
                        .otherwise("very_long")) \
             .withColumn("fare_per_mile",
                        when(col("trip_distance") > 0, col("fare_amount") / col("trip_distance"))
+                       .otherwise(0)) \
+            .withColumn("tip_percentage",
+                       when(col("fare_amount") > 0, (col("tip_amount") / col("fare_amount")) * 100)
                        .otherwise(0))
         
         logger.info("Derived features added successfully")
@@ -116,7 +124,8 @@ class SparkProcessor:
                 sum("total_amount").alias("total_revenue"),
                 avg("trip_distance").alias("avg_trip_distance"),
                 avg("fare_amount").alias("avg_fare_amount"),
-                avg("tip_amount").alias("avg_tip_amount")
+                avg("tip_amount").alias("avg_tip_amount"),
+                avg("passenger_count").alias("avg_passenger_count")
             ) \
             .orderBy("VendorID")
         
@@ -132,12 +141,51 @@ class SparkProcessor:
                 count("*").alias("total_trips"),
                 avg("fare_amount").alias("avg_fare"),
                 avg("trip_distance").alias("avg_distance"),
-                avg("tip_amount").alias("avg_tip")
+                avg("tip_amount").alias("avg_tip"),
+                avg("fare_per_mile").alias("avg_fare_per_mile")
             ) \
             .orderBy("distance_category")
         
         logger.info("Distance patterns calculated successfully")
         return distance_stats
+    
+    def calculate_payment_patterns(self, df: DataFrame) -> DataFrame:
+        """Calculate patterns by payment type"""
+        logger.info("Calculating payment patterns...")
+        
+        payment_stats = df.groupBy("payment_type") \
+            .agg(
+                count("*").alias("total_trips"),
+                avg("fare_amount").alias("avg_fare"),
+                avg("tip_amount").alias("avg_tip"),
+                avg("total_amount").alias("avg_total"),
+                (avg("tip_amount") / avg("fare_amount") * 100).alias("avg_tip_percentage")
+            ) \
+            .orderBy("payment_type")
+        
+        logger.info("Payment patterns calculated successfully")
+        return payment_stats
+    
+    def prepare_for_postgres(self, df: DataFrame) -> DataFrame:
+        """Prepare DataFrame for PostgreSQL insertion by selecting and renaming columns"""
+        logger.info("Preparing DataFrame for PostgreSQL...")
+        
+        # Select only the columns that match our PostgreSQL schema
+        postgres_df = df.select(
+            col("VendorID").alias("vendor_id"),
+            col("passenger_count").cast("float"),
+            col("trip_distance").cast("float"),
+            col("fare_amount").cast("float"),
+            col("tip_amount").cast("float"),
+            col("total_amount").cast("float"),
+            col("payment_type").cast("int"),
+            col("RatecodeID").alias("rate_code_id").cast("int"),
+            col("distance_category"),
+            col("fare_per_mile").cast("float")
+        )
+        
+        logger.info("DataFrame prepared for PostgreSQL")
+        return postgres_df
     
     def write_to_postgresql(self, df: DataFrame, table_name: str, mode: str = "append") -> bool:
         """Write DataFrame to PostgreSQL"""
@@ -171,6 +219,37 @@ class SparkProcessor:
         except Exception as e:
             logger.error(f"Failed to write to HDFS: {e}")
             return False
+    
+    def get_basic_stats(self, df: DataFrame) -> Dict[str, Any]:
+        """Get basic statistics about the dataset"""
+        logger.info("Calculating basic statistics...")
+        
+        stats = {
+            "total_rows": df.count(),
+            "total_columns": len(df.columns),
+            "columns": df.columns
+        }
+        
+        # Get numerical column statistics
+        numerical_cols = ["fare_amount", "trip_distance", "tip_amount", "total_amount", "passenger_count"]
+        for col_name in numerical_cols:
+            if col_name in df.columns:
+                col_stats = df.select(
+                    min(col(col_name)).alias("min"),
+                    max(col(col_name)).alias("max"),
+                    avg(col(col_name)).alias("avg"),
+                    stddev(col(col_name)).alias("stddev")
+                ).collect()[0]
+                
+                stats[f"{col_name}_stats"] = {
+                    "min": col_stats["min"],
+                    "max": col_stats["max"], 
+                    "avg": round(col_stats["avg"], 2) if col_stats["avg"] else None,
+                    "stddev": round(col_stats["stddev"], 2) if col_stats["stddev"] else None
+                }
+        
+        logger.info(f"Basic statistics calculated: {stats}")
+        return stats
     
     def stop(self):
         """Stop Spark session"""

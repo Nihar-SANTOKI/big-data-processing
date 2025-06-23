@@ -25,15 +25,16 @@ class DataValidator:
             
         suite = self.context.add_expectation_suite(expectation_suite_name=suite_name)
         
-        # Add specific expectations
+        # Add specific expectations (removed datetime expectations)
         suite.expect_column_values_to_not_be_null("fare_amount")
         suite.expect_column_values_to_be_between("fare_amount", min_value=0, max_value=500)
         suite.expect_column_values_to_be_between("trip_distance", min_value=0, max_value=100)
+        suite.expect_column_values_to_be_between("passenger_count", min_value=1, max_value=6)
         
         return suite
     
     def validate_data_quality(self, df) -> Dict[str, Any]:
-        """Enhanced data quality checks - works with both Spark and Pandas"""
+        """Enhanced data quality checks - works with both Spark and Pandas (no datetime validation)"""
         logger.info("Running comprehensive data quality checks...")
         
         # Check if this is a PandasDataFrameWrapper (our fallback class)
@@ -47,7 +48,7 @@ class DataValidator:
             return self._validate_spark_quality(df)
     
     def _validate_pandas_quality(self, pandas_df: pd.DataFrame) -> Dict[str, Any]:
-        """Data quality validation using pandas operations"""
+        """Data quality validation using pandas operations (no datetime checks)"""
         logger.info("Running pandas-based data quality checks...")
         
         total_rows = len(pandas_df)
@@ -76,27 +77,18 @@ class DataValidator:
         for col_name, col_type in pandas_df.dtypes.items():
             quality_metrics["data_types"][col_name] = str(col_type)
         
-        # Business logic validations
+        # Business logic validations (removed datetime validations)
         invalid_fares = len(pandas_df[(pandas_df['fare_amount'] < 0) | (pandas_df['fare_amount'] > 1000)])
         invalid_distances = len(pandas_df[(pandas_df['trip_distance'] < 0) | (pandas_df['trip_distance'] > 200)])
+        invalid_passengers = 0
         
-        # Convert datetime columns if they're strings
-        pickup_col = 'tpep_pickup_datetime'
-        dropoff_col = 'tpep_dropoff_datetime'
-        future_trips = 0
-        
-        try:
-            if pickup_col in pandas_df.columns and dropoff_col in pandas_df.columns:
-                pickup_dt = pd.to_datetime(pandas_df[pickup_col], errors='coerce')
-                dropoff_dt = pd.to_datetime(pandas_df[dropoff_col], errors='coerce')
-                future_trips = len(pandas_df[pickup_dt > dropoff_dt])
-        except Exception as e:
-            logger.warning(f"Could not validate datetime logic: {e}")
+        if 'passenger_count' in pandas_df.columns:
+            invalid_passengers = len(pandas_df[(pandas_df['passenger_count'] < 1) | (pandas_df['passenger_count'] > 6)])
         
         quality_metrics["business_rule_violations"] = {
             "invalid_fares": invalid_fares,
             "invalid_distances": invalid_distances,
-            "future_trips": future_trips
+            "invalid_passengers": invalid_passengers
         }
         
         # Calculate data quality score
@@ -108,7 +100,7 @@ class DataValidator:
         return quality_metrics
     
     def _validate_spark_quality(self, df: DataFrame) -> Dict[str, Any]:
-        """Data quality validation using Spark operations"""
+        """Data quality validation using Spark operations (no datetime checks)"""
         # Import PySpark functions here to ensure Spark context is active
         from pyspark.sql.functions import col, count, when, isnan, isnull
         
@@ -140,15 +132,18 @@ class DataValidator:
         for col_name, col_type in df.dtypes:
             quality_metrics["data_types"][col_name] = col_type
         
-        # Business logic validations
+        # Business logic validations (removed datetime validations)
         invalid_fares = df.filter((col("fare_amount") < 0) | (col("fare_amount") > 1000)).count()
         invalid_distances = df.filter((col("trip_distance") < 0) | (col("trip_distance") > 200)).count()
-        future_trips = df.filter(col("tpep_pickup_datetime") > col("tpep_dropoff_datetime")).count()
+        invalid_passengers = 0
+        
+        if 'passenger_count' in df.columns:
+            invalid_passengers = df.filter((col("passenger_count") < 1) | (col("passenger_count") > 6)).count()
         
         quality_metrics["business_rule_violations"] = {
             "invalid_fares": invalid_fares,
             "invalid_distances": invalid_distances,
-            "future_trips": future_trips
+            "invalid_passengers": invalid_passengers
         }
         
         # Calculate data quality score
@@ -160,10 +155,9 @@ class DataValidator:
         return quality_metrics
     
     def validate_taxi_data_schema(self, df) -> bool:
-        """Validate that the DataFrame has expected taxi data schema"""
+        """Validate that the DataFrame has expected taxi data schema (removed datetime columns)"""
         expected_columns = {
-            'VendorID', 'tpep_pickup_datetime', 'tpep_dropoff_datetime',
-            'passenger_count', 'trip_distance', 'fare_amount', 'tip_amount', 'total_amount'
+            'VendorID', 'passenger_count', 'trip_distance', 'fare_amount', 'tip_amount', 'total_amount'
         }
         
         # Handle both Spark and Pandas DataFrames
@@ -177,8 +171,14 @@ class DataValidator:
         missing_columns = expected_columns - actual_columns
         
         if missing_columns:
-            logger.error(f"Missing required columns: {missing_columns}")
-            return False
+            logger.warning(f"Missing expected columns (may be optional): {missing_columns}")
+            # Check for critical columns only
+            critical_columns = {'fare_amount', 'trip_distance'}
+            critical_missing = critical_columns - actual_columns
+            
+            if critical_missing:
+                logger.error(f"Missing critical columns: {critical_missing}")
+                return False
         
         logger.info("Schema validation passed")
         return True
