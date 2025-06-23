@@ -13,13 +13,32 @@ This project demonstrates enterprise-level data engineering skills by building a
 ## 🏗️ Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Data Source   │    │   Processing    │    │    Storage      │
-│                 │    │                 │    │                 │
-│ NYC Open Data   │───▶│ PySpark Cluster │───▶│ PostgreSQL      │
-│ (Parquet Files) │    │ (3 Workers +    │    │ HDFS            │
-│                 │    │  Jupyter)       │    │ Local storage   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+flowchart LR
+    A["`**Data Source**
+    📊 NYC Open Data
+    (Parquet Files)`"] --> B["`**Processing Layer**
+    ⚡ PySpark Cluster
+    • 3 Workers
+    • Jupyter Notebook`"]
+    
+    B --> C["`**Storage Options**
+    💾 Multiple Backends`"]
+    
+    C --> D["`🐘 **PostgreSQL**
+    Relational Database`"]
+    
+    C --> E["`🗄️ **HDFS**
+    Distributed Storage`"]
+    
+    C --> F["`💿 **Local Storage**
+    File System`"]
+    
+    style A fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style B fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style C fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    style D fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style E fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style F fill:#fff3e0,stroke:#e65100,stroke-width:2px
 ```
 
 ## 🔧 Tech Stack
