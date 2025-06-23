@@ -85,7 +85,12 @@ class NYCTaxiDataPipeline:
                     logger.error(f"Failed to read data from {url}")
                     continue
 
-                initial_count = df.count() if hasattr(df, 'count') else len(df)
+                # Fix the count issue - handle both pandas and Spark DataFrames
+                if hasattr(df, 'count'):  # Spark DataFrame
+                    initial_count = df.count()
+                else:  # Pandas DataFrame
+                    initial_count = len(df)
+                    
                 logger.info(f"Initial dataset size: {initial_count:,} records")
 
                 # Validate schema first
@@ -103,7 +108,13 @@ class NYCTaxiDataPipeline:
 
                 # Continue with data processing
                 cleaned_df = self.spark_processor.clean_taxi_data(df)
-                cleaned_count = cleaned_df.count() if hasattr(cleaned_df, 'count') else len(cleaned_df)
+                
+                # Fix the count issue for cleaned data too
+                if hasattr(cleaned_df, 'count'):  # Spark DataFrame
+                    cleaned_count = cleaned_df.count()
+                else:  # Pandas DataFrame
+                    cleaned_count = len(cleaned_df)
+                    
                 logger.info(f"After cleaning: {cleaned_count:,} records")
 
                 enhanced_df = self.spark_processor.add_derived_features(cleaned_df)
@@ -115,7 +126,7 @@ class NYCTaxiDataPipeline:
                 # Write to HDFS (skip for pandas fallback)
                 hdfs_path = f"{settings.data.hdfs_base_path}/processed/{month_name}"
                 try:
-                    if hasattr(self.spark_processor, 'write_to_hdfs'):
+                    if hasattr(self.spark_processor, 'write_to_hdfs') and not self.spark_processor.use_pandas_fallback:
                         self.spark_processor.write_to_hdfs(enhanced_df, hdfs_path)
                 except Exception as e:
                     logger.warning(f"HDFS write failed (expected with pandas fallback): {e}")
@@ -170,7 +181,7 @@ class NYCTaxiDataPipeline:
                     distance_stats = self.spark_processor.calculate_distance_patterns(enhanced_df)
                     payment_stats = self.spark_processor.calculate_payment_patterns(enhanced_df)
                     
-                    # Convert to pandas for storage
+                    # Convert to pandas for storage (handle both Spark and pandas)
                     if hasattr(vendor_stats, 'toPandas'):
                         vendor_pandas = vendor_stats.toPandas()
                         distance_pandas = distance_stats.toPandas()
@@ -410,7 +421,7 @@ def main():
     
     # Create a SparkProcessor instance to check processing mode
     temp_processor = SparkProcessor()
-    processing_mode = 'Pandas Fallback' if hasattr(temp_processor, 'use_pandas_fallback') and temp_processor.use_pandas_fallback else 'Spark'
+    processing_mode = 'Pandas Fallback' if temp_processor.use_pandas_fallback else 'Spark'
     logger.info(f"Processing mode: {processing_mode}")
     temp_processor.stop()
 
