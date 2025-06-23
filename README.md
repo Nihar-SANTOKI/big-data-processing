@@ -12,7 +12,7 @@ This project demonstrates enterprise-level data engineering skills by building a
 
 ## 🏗️ Architecture
 
-```
+```mermaid
 flowchart LR
     A["`**Data Source**
     📊 NYC Open Data
@@ -39,7 +39,6 @@ flowchart LR
     style D fill:#fff3e0,stroke:#e65100,stroke-width:2px
     style E fill:#fff3e0,stroke:#e65100,stroke-width:2px
     style F fill:#fff3e0,stroke:#e65100,stroke-width:2px
-```
 
 ## 🔧 Tech Stack
 
