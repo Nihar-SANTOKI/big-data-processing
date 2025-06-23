@@ -1,16 +1,8 @@
 import os
 from dotenv import load_dotenv
 from dataclasses import dataclass
-from typing import Optional
 
 load_dotenv()
-
-@dataclass
-class AWSConfig:
-    access_key_id: str = os.getenv('AWS_ACCESS_KEY_ID', '')
-    secret_access_key: str = os.getenv('AWS_SECRET_ACCESS_KEY', '')
-    region: str = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
-    s3_bucket: str = os.getenv('S3_BUCKET_NAME', '')
 
 @dataclass
 class PostgreSQLConfig:
@@ -28,11 +20,11 @@ class PostgreSQLConfig:
 class SparkConfig:
     master_url: str = os.getenv('SPARK_MASTER_URL', 'local[*]')
     app_name: str = os.getenv('SPARK_APP_NAME', 'NYCTaxiProcessor')
-    max_result_size: str = '4g'  # Increased
-    driver_memory: str = os.getenv('SPARK_DRIVER_MEMORY', '2g')  # Reduced default
+    max_result_size: str = '4g'
+    driver_memory: str = os.getenv('SPARK_DRIVER_MEMORY', '2g')
     executor_memory: str = os.getenv('SPARK_EXECUTOR_MEMORY', '2g')
-    executor_cores: str = '2'    # Added
-    sql_shuffle_partitions: str = '200'  # Added
+    executor_cores: str = '2'
+    sql_shuffle_partitions: str = '200'
 
 @dataclass
 class DataConfig:
@@ -43,7 +35,6 @@ class DataConfig:
 @dataclass
 class Settings:
     def __init__(self):
-        self.aws = AWSConfig()
         self.postgres = PostgreSQLConfig()
         self.spark = SparkConfig()
         self.data = DataConfig()
@@ -57,7 +48,5 @@ class Settings:
         """Validate critical configuration"""
         if not self.postgres.host:
             raise ValueError("POSTGRES_HOST must be set")
-        if not self.aws.access_key_id and self.aws.s3_bucket:
-            raise ValueError("AWS credentials required when S3 bucket is specified")
 
 settings = Settings()

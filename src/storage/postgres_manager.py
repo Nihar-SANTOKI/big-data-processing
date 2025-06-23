@@ -99,20 +99,12 @@ class PostgreSQLManager:
             return False
             
         try:
-            # Convert datetime columns to string to avoid timezone issues
+            # Create a copy to avoid modifying the original
             df_copy = df.copy()
             
             # Handle different data types that might cause issues
             for col in df_copy.columns:
-                if df_copy[col].dtype == 'datetime64[ns]':
-                    df_copy[col] = df_copy[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-                elif df_copy[col].dtype == 'object' and col in ['trip_date']:
-                    # Handle date objects
-                    try:
-                        df_copy[col] = pd.to_datetime(df_copy[col], errors='coerce').dt.strftime('%Y-%m-%d')
-                    except:
-                        pass  # Keep original if conversion fails
-                elif df_copy[col].dtype == 'bool':
+                if df_copy[col].dtype == 'bool':
                     # Convert boolean to integer for PostgreSQL
                     df_copy[col] = df_copy[col].astype(int)
                 elif df_copy[col].dtype == 'category':
@@ -166,12 +158,10 @@ class PostgreSQLManager:
             return False
             
         create_tables_sql = """
-        -- Raw taxi trips table
+        -- Raw taxi trips table (no datetime columns)
         CREATE TABLE IF NOT EXISTS taxi_trips_raw (
             id SERIAL PRIMARY KEY,
             vendor_id INTEGER,
-            pickup_datetime TIMESTAMP,
-            dropoff_datetime TIMESTAMP,
             passenger_count INTEGER,
             trip_distance DECIMAL(8,2),
             pickup_longitude DECIMAL(10,6),
@@ -186,48 +176,35 @@ class PostgreSQLManager:
             mta_tax DECIMAL(8,2),
             tip_amount DECIMAL(8,2),
             tolls_amount DECIMAL(8,2),
-            total_amount DECIMAL(8,2),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            total_amount DECIMAL(8,2)
         );
         
-        -- Processed taxi trips table
+        -- Processed taxi trips table (no datetime columns)
         CREATE TABLE IF NOT EXISTS taxi_trips_processed (
             id SERIAL PRIMARY KEY,
             vendor_id INTEGER,
-            tpep_pickup_datetime TIMESTAMP,  -- Keep original column name
-            tpep_dropoff_datetime TIMESTAMP, -- Keep original column name
             passenger_count FLOAT,
             trip_distance FLOAT,
             fare_amount FLOAT,
             tip_amount FLOAT,
             total_amount FLOAT,
-            trip_date DATE,
-            hour_of_day INTEGER,
-            day_of_week INTEGER,
-            trip_duration_minutes FLOAT,
-            is_weekend BOOLEAN,
             distance_category VARCHAR(20),
-            fare_per_mile FLOAT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            fare_per_mile FLOAT
         );
         
-        -- Daily aggregations table
+        -- Daily aggregations table (simplified)
         CREATE TABLE IF NOT EXISTS daily_trip_stats (
             id SERIAL PRIMARY KEY,
-            trip_date DATE,
             total_trips INTEGER,
             total_revenue DECIMAL(12,2),
             avg_trip_distance DECIMAL(8,2),
             avg_fare_amount DECIMAL(8,2),
-            avg_tip_amount DECIMAL(8,2),
-            avg_trip_duration DECIMAL(8,2),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            avg_tip_amount DECIMAL(8,2)
         );
         
         -- Create indexes for better performance
-        CREATE INDEX IF NOT EXISTS idx_taxi_trips_raw_pickup_datetime ON taxi_trips_raw(pickup_datetime);
-        CREATE INDEX IF NOT EXISTS idx_taxi_trips_processed_trip_date ON taxi_trips_processed(trip_date);
-        CREATE INDEX IF NOT EXISTS idx_daily_trip_stats_trip_date ON daily_trip_stats(trip_date);
+        CREATE INDEX IF NOT EXISTS idx_taxi_trips_raw_vendor_id ON taxi_trips_raw(vendor_id);
+        CREATE INDEX IF NOT EXISTS idx_taxi_trips_processed_vendor_id ON taxi_trips_processed(vendor_id);
         """
         
         return self.execute_query(create_tables_sql)

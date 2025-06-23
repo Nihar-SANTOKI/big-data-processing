@@ -54,23 +54,20 @@ class SparkProcessor:
             return None
     
     def clean_taxi_data(self, df: DataFrame) -> DataFrame:
-        """Clean and validate taxi trip data"""
+        """Clean and validate taxi trip data (no datetime processing)"""
         logger.info("Starting data cleaning process...")
         
         # Original count
         original_count = df.count()
         
-        # Basic cleaning
+        # Basic cleaning - removed datetime filters
         cleaned_df = df \
             .filter(col("fare_amount") > 0) \
             .filter(col("fare_amount") < 500) \
             .filter(col("trip_distance") > 0) \
             .filter(col("trip_distance") < 100) \
             .filter(col("passenger_count") > 0) \
-            .filter(col("passenger_count") <= 6) \
-            .filter(col("tpep_pickup_datetime").isNotNull()) \
-            .filter(col("tpep_dropoff_datetime").isNotNull()) \
-            .filter(col("tpep_pickup_datetime") < col("tpep_dropoff_datetime"))
+            .filter(col("passenger_count") <= 6)
         
         # Remove outliers using IQR for fare_amount
         quantiles = cleaned_df.select(
@@ -93,18 +90,10 @@ class SparkProcessor:
         return cleaned_df
     
     def add_derived_features(self, df: DataFrame) -> DataFrame:
-        """Add derived features for analysis"""
+        """Add derived features for analysis (no datetime features)"""
         logger.info("Adding derived features...")
         
         enhanced_df = df \
-            .withColumn("trip_date", to_date(col("tpep_pickup_datetime"))) \
-            .withColumn("hour_of_day", hour(col("tpep_pickup_datetime"))) \
-            .withColumn("day_of_week", dayofweek(col("tpep_pickup_datetime"))) \
-            .withColumn("trip_duration_minutes", 
-                       (unix_timestamp(col("tpep_dropoff_datetime")) - 
-                        unix_timestamp(col("tpep_pickup_datetime"))) / 60) \
-            .withColumn("is_weekend", 
-                       when(col("day_of_week").isin([1, 7]), True).otherwise(False)) \
             .withColumn("distance_category",
                        when(col("trip_distance") < 1, "short")
                        .when(col("trip_distance") < 5, "medium")
@@ -117,39 +106,38 @@ class SparkProcessor:
         logger.info("Derived features added successfully")
         return enhanced_df
     
-    def calculate_daily_aggregations(self, df: DataFrame) -> DataFrame:
-        """Calculate daily trip statistics"""
-        logger.info("Calculating daily aggregations...")
+    def calculate_aggregations(self, df: DataFrame) -> DataFrame:
+        """Calculate trip statistics by vendor"""
+        logger.info("Calculating aggregations...")
         
-        daily_stats = df.groupBy("trip_date") \
+        stats = df.groupBy("VendorID") \
             .agg(
                 count("*").alias("total_trips"),
                 sum("total_amount").alias("total_revenue"),
                 avg("trip_distance").alias("avg_trip_distance"),
                 avg("fare_amount").alias("avg_fare_amount"),
-                avg("tip_amount").alias("avg_tip_amount"),
-                avg("trip_duration_minutes").alias("avg_trip_duration")
+                avg("tip_amount").alias("avg_tip_amount")
             ) \
-            .orderBy("trip_date")
+            .orderBy("VendorID")
         
-        logger.info("Daily aggregations calculated successfully")
-        return daily_stats
+        logger.info("Aggregations calculated successfully")
+        return stats
     
-    def calculate_hourly_patterns(self, df: DataFrame) -> DataFrame:
-        """Calculate hourly trip patterns"""
-        logger.info("Calculating hourly patterns...")
+    def calculate_distance_patterns(self, df: DataFrame) -> DataFrame:
+        """Calculate patterns by distance category"""
+        logger.info("Calculating distance patterns...")
         
-        hourly_stats = df.groupBy("hour_of_day") \
+        distance_stats = df.groupBy("distance_category") \
             .agg(
                 count("*").alias("total_trips"),
                 avg("fare_amount").alias("avg_fare"),
                 avg("trip_distance").alias("avg_distance"),
                 avg("tip_amount").alias("avg_tip")
             ) \
-            .orderBy("hour_of_day")
+            .orderBy("distance_category")
         
-        logger.info("Hourly patterns calculated successfully")
-        return hourly_stats
+        logger.info("Distance patterns calculated successfully")
+        return distance_stats
     
     def write_to_postgresql(self, df: DataFrame, table_name: str, mode: str = "append") -> bool:
         """Write DataFrame to PostgreSQL"""
