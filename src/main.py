@@ -28,6 +28,27 @@ def get_storage_manager():
 # Initialize storage manager
 storage_manager = get_storage_manager()
 
+def get_dataframe_count(df):
+    """Safely get DataFrame row count for both pandas and Spark DataFrames"""
+    try:
+        # Check if it's a Spark DataFrame first
+        if hasattr(df, 'count') and hasattr(df, 'collect'):  # Spark DataFrame
+            return int(df.count())
+        # For pandas DataFrame
+        elif hasattr(df, 'shape'):
+            count = df.shape[0]
+            # Ensure we return an integer, not a Series
+            if hasattr(count, 'iloc'):  # If it's somehow a Series
+                return int(count.iloc[0])
+            return int(count)
+        # Fallback to len()
+        else:
+            result = len(df)
+            return int(result) if not hasattr(result, 'iloc') else int(result.iloc[0])
+    except Exception as e:
+        logger.warning(f"Could not get DataFrame count: {e}")
+        return 0
+
 class NYCTaxiDataPipeline:
     def __init__(self):
         # Initialize components
@@ -85,12 +106,8 @@ class NYCTaxiDataPipeline:
                     logger.error(f"Failed to read data from {url}")
                     continue
 
-                # Fix the count issue - handle both pandas and Spark DataFrames
-                if hasattr(df, 'count'):  # Spark DataFrame
-                    initial_count = df.count()
-                else:  # Pandas DataFrame
-                    initial_count = len(df)
-                    
+                # Fix the count issue - use the safe count function
+                initial_count = get_dataframe_count(df)
                 logger.info(f"Initial dataset size: {initial_count:,} records")
 
                 # Validate schema first
@@ -110,11 +127,7 @@ class NYCTaxiDataPipeline:
                 cleaned_df = self.spark_processor.clean_taxi_data(df)
                 
                 # Fix the count issue for cleaned data too
-                if hasattr(cleaned_df, 'count'):  # Spark DataFrame
-                    cleaned_count = cleaned_df.count()
-                else:  # Pandas DataFrame
-                    cleaned_count = len(cleaned_df)
-                    
+                cleaned_count = get_dataframe_count(cleaned_df)
                 logger.info(f"After cleaning: {cleaned_count:,} records")
 
                 enhanced_df = self.spark_processor.add_derived_features(cleaned_df)
